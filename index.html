@@ -425,8 +425,10 @@ if (API) {
   });
 }
 let detector = null, stream = null, track = null, running = false, busy = false, wake = null;
-let lastCode = '', lastSeen = 0;
+let lastCode = '', lastSeen = 0;      // the label counted last, and when it was last seen
+let candCode = '', candSeen = 0;      // a label read once, waiting for a matching second read
 const COOLDOWN = 1200;       // the same label must be out of view this long before it counts again
+const CONFIRM = 1000;        // a label counts only when two reads match within this window (a garbled read rarely repeats; 1s leaves room for a slow phone)
 const MAX_W = 1600;
 const canvas = document.createElement('canvas');
 const ctx = canvas.getContext('2d', {willReadFrequently: true});
@@ -452,7 +454,7 @@ async function start() {
   try { await ready; } catch (e) {}
   if (!detector) detector = new API.BarcodeDetector({formats: ['code_128']});
   try { if (navigator.wakeLock) wake = await navigator.wakeLock.request('screen'); } catch (e) {}
-  startBtn.hidden = true; running = true; lastCode = ''; tick();
+  startBtn.hidden = true; running = true; lastCode = ''; candCode = ''; tick();
 }
 function stop() {
   running = false;
@@ -497,14 +499,21 @@ async function scanFrame() {
         if (b.rawValue && d < bd) { bd = d; best = b; }
       }
       if (best) {
-        const code = norm(best.rawValue);
-        if (code === lastCode && now - lastSeen < COOLDOWN) lastSeen = now;
-        else { lastCode = code; lastSeen = now; register(code, false); }
+        onRead(norm(best.rawValue), now);
       }
     }
   } catch (e) { /* skip this frame */ }
   busy = false;
   tick();
+}
+
+// One decoded read. A stray read never counts and never resets the box already in view.
+function onRead(code, now) {
+  if (code === lastCode && now - lastSeen < COOLDOWN) { lastSeen = now; return false; }   // same box, still in view
+  if (code === candCode && now - candSeen < CONFIRM) {                                    // second matching read: count it
+    candCode = ''; lastCode = code; lastSeen = now; register(code, false); return true;
+  }
+  candCode = code; candSeen = now; return false;                                          // first read: wait for a match
 }
 
 /* ---------- wiring ---------- */
@@ -524,7 +533,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden && running) { stop(); showStart('Tap to resume scanning', 'Your count is saved.'); }
 });
 
-window.boxcount = {register, undo, resolve, buildCsv, buildText, state: () => state};   // for testing
+window.boxcount = {register, undo, resolve, buildCsv, buildText, onRead, state: () => state};   // for testing
 render();
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
